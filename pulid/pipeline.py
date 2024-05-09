@@ -9,6 +9,7 @@ from diffusers import (
     DPMSolverMultistepScheduler,
     StableDiffusionXLPipeline,
     UNet2DConditionModel,
+    StableDiffusionXLInpaintPipeline
 )
 from facexlib.parsing import init_parsing_model
 from facexlib.utils.face_restoration_helper import FaceRestoreHelper
@@ -47,7 +48,7 @@ class PuLIDPipeline:
         )
         unet.half()
         self.hack_unet_attn_layers(unet)
-        self.pipe = StableDiffusionXLPipeline.from_pretrained(
+        self.pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
             sdxl_base_repo, unet=unet, torch_dtype=torch.float16, variant="fp16"
         ).to(self.device)
         self.pipe.watermark = None
@@ -217,9 +218,11 @@ class PuLIDPipeline:
         # return id_embedding
         return torch.cat((uncond_id_embedding, id_embedding), dim=0)
 
-    def inference(self, prompt, size, prompt_n='', image_embedding=None, id_scale=1.0, guidance_scale=1.2, steps=4):
+    def inference(self, prompt, image, mask_image, size, prompt_n='', image_embedding=None, id_scale=1.0, guidance_scale=1.2, steps=4):
         images = self.pipe(
             prompt=prompt,
+            image=image,
+            mask_image=mask_image,
             negative_prompt=prompt_n,
             num_images_per_prompt=size[0],
             height=size[1],
