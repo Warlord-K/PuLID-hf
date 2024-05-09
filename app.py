@@ -41,23 +41,16 @@ def run(*args):
     if id_image is not None:
         id_image = resize_numpy_image_long(id_image, 1024)
         id_embeddings = pipeline.get_id_embedding(id_image)
-        for supp_id_image in supp_images:
-            if supp_id_image is not None:
-                supp_id_image = resize_numpy_image_long(supp_id_image, 1024)
-                supp_id_embeddings = pipeline.get_id_embedding(supp_id_image)
-                id_embeddings = torch.cat(
-                    (id_embeddings, supp_id_embeddings if id_mix else supp_id_embeddings[:, :5]), dim=1
-                )
     else:
         id_embeddings = None
 
     seed_everything(seed)
     ims = []
     for _ in range(n_samples):
-        img = pipeline.inference(prompt, (1, H, W), neg_prompt, id_embeddings, id_scale, scale, steps)[0]
+        img = pipeline.inference(prompt, supp_images[0], supp_images[1], (1, H, W), neg_prompt, id_embeddings, id_scale, scale, steps)[0]
         ims.append(np.array(img))
 
-    return ims, pipeline.debug_img_list
+    return ims, pipeline.debug_img_listf
 
 
 _HEADER_ = '''
@@ -106,10 +99,10 @@ with gr.Blocks(title="PuLID", css=".gr-box {border-color: #8136e2}") as demo:
             with gr.Row():
                 face_image = gr.Image(label="ID image (main)", sources="upload", type="numpy", height=256)
                 supp_image1 = gr.Image(
-                    label="Additional ID image (auxiliary)", sources="upload", type="numpy", height=256
+                    label="Image to Inpaint", sources="upload", type="numpy", height=256
                 )
                 supp_image2 = gr.Image(
-                    label="Additional ID image (auxiliary)", sources="upload", type="numpy", height=256
+                    label="Mask Image", sources="upload", type="numpy", height=256
                 )
                 supp_image3 = gr.Image(
                     label="Additional ID image (auxiliary)", sources="upload", type="numpy", height=256
