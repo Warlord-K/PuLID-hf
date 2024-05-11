@@ -8,8 +8,8 @@ from basicsr.utils import img2tensor, tensor2img
 from diffusers import (
     DPMSolverMultistepScheduler,
     StableDiffusionXLPipeline,
+    StableDiffusionXLInpaintPipeline,
     UNet2DConditionModel,
-    StableDiffusionXLInpaintPipeline
 )
 from facexlib.parsing import init_parsing_model
 from facexlib.utils.face_restoration_helper import FaceRestoreHelper
@@ -40,22 +40,27 @@ class PuLIDPipeline:
         self.sdxl_base_repo = sdxl_base_repo
 
         # load base model
-        unet = UNet2DConditionModel.from_config(sdxl_base_repo, subfolder='unet').to(self.device, torch.float16)
+        unet = UNet2DConditionModel.from_config(sdxl_base_repo, subfolder='unet',cache_dir="hf_cache").to(self.device, torch.float16)
         unet.load_state_dict(
             load_file(
-                hf_hub_download(sdxl_lightning_repo, 'sdxl_lightning_4step_unet.safetensors'), device=self.device
+                hf_hub_download(sdxl_lightning_repo, 'sdxl_lightning_4step_unet.safetensors',cache_dir="hf_cache"), device=self.device
             )
         )
-        unet.half()
         self.hack_unet_attn_layers(unet)
-        self.pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-            sdxl_base_repo, unet=unet, torch_dtype=torch.float16, variant="fp16"
+        self.pipe = StableDiffusionXLPipeline.from_pretrained(
+            sdxl_base_repo, unet=unet, torch_dtype=torch.float16, variant="fp16",cache_dir="hf_cache"
         ).to(self.device)
         self.pipe.watermark = None
-
+        self.inpaint_pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
+            sdxl_base_repo, unet=unet, torch_dtype=torch.float16, variant="fp16",cache_dir="hf_cache"
+        ).to(self.device)
+        self.inpaint_pipe.watermark = None
         # scheduler
         self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(
             self.pipe.scheduler.config, timestep_spacing="trailing"
+        )
+        self.inpaint_pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+            self.inpaint_pipe.scheduler.config, timestep_spacing="trailing"
         )
 
         # ID adapters
@@ -88,13 +93,11 @@ class PuLIDPipeline:
         # antelopev2
         snapshot_download('DIAMONIK7777/antelopev2', local_dir='models/antelopev2')
         self.app = FaceAnalysis(
-            name='antelopev2', root='.', providers=['CPUExecutionProvider']
+            name='antelopev2', root='.', providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
         )
         self.app.prepare(ctx_id=0, det_size=(640, 640))
-        self.handler_ante = insightface.model_zoo.get_model('models/antelopev2/glintr100.onnx', providers=['CPUExecutionProvider'])
+        self.handler_ante = insightface.model_zoo.get_model('models/antelopev2/glintr100.onnx')
         self.handler_ante.prepare(ctx_id=0)
-
-        print('load done')
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -218,8 +221,21 @@ class PuLIDPipeline:
         # return id_embedding
         return torch.cat((uncond_id_embedding, id_embedding), dim=0)
 
-    def inference(self, prompt, image, mask_image, size, prompt_n='', image_embedding=None, id_scale=1.0, guidance_scale=1.2, steps=4):
+    def inference(self, prompt, size, prompt_n='', image_embedding=None, id_scale=1.0, guidance_scale=1.2, steps=4):
         images = self.pipe(
+            prompt=prompt,
+            negative_prompt=prompt_n,
+            num_images_per_prompt=size[0],
+            height=size[1],
+            width=size[2],
+            num_inference_steps=steps,
+            guidance_scale=guidance_scale,
+            cross_attention_kwargs={'id_embedding': image_embedding, 'id_scale': id_scale},
+        ).images
+        return images
+
+    def inpaint(self, prompt, image, mask_image, size, prompt_n='', image_embedding=None, id_scale=1.0, guidance_scale=1.2, steps=4):
+        images = self.inpaint_pipe(
             prompt=prompt,
             image=image,
             mask_image=mask_image,
