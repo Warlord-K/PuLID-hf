@@ -35,33 +35,37 @@ class PuLIDPipeline:
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.device = 'cuda'
-        sdxl_base_repo = 'stabilityai/stable-diffusion-xl-base-1.0'
+        if not kwargs.get("sdxl_base_repo", None):
+            sdxl_base_repo = 'stabilityai/stable-diffusion-xl-base-1.0'
+        else:
+            sdxl_base_repo = kwargs["sdxl_base_repo"]
+        
         sdxl_lightning_repo = 'ByteDance/SDXL-Lightning'
         self.sdxl_base_repo = sdxl_base_repo
 
         # load base model
-        unet = UNet2DConditionModel.from_config(sdxl_base_repo, subfolder='unet',cache_dir="hf_cache").to(self.device, torch.float16)
-        unet.load_state_dict(
-            load_file(
-                hf_hub_download(sdxl_lightning_repo, 'sdxl_lightning_4step_unet.safetensors',cache_dir="hf_cache"), device=self.device
+        if not kwargs.get("sdxl_unet_repo", None):
+            unet = UNet2DConditionModel.from_config(sdxl_base_repo, subfolder='unet',cache_dir="hf_cache").to(self.device, torch.float16)
+            unet.load_state_dict(
+                load_file(
+                    hf_hub_download(sdxl_lightning_repo, 'sdxl_lightning_4step_unet.safetensors',cache_dir="hf_cache"), device=self.device
+                )
             )
-        )
+        else:
+            unet = UNet2DConditionModel.from_pretrained(kwargs["sdxl_unet_repo"], variant="fp16", torch_dtype=torch.float16, cache_dir="hf_cache")
         self.hack_unet_attn_layers(unet)
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             sdxl_base_repo, unet=unet, torch_dtype=torch.float16, variant="fp16",cache_dir="hf_cache"
         ).to(self.device)
         self.pipe.watermark = None
-        self.inpaint_pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-            sdxl_base_repo, unet=unet, torch_dtype=torch.float16, variant="fp16",cache_dir="hf_cache"
-        ).to(self.device)
-        self.inpaint_pipe.watermark = None
         # scheduler
         self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(
             self.pipe.scheduler.config, timestep_spacing="trailing"
         )
-        self.inpaint_pipe.scheduler = DPMSolverMultistepScheduler.from_config(
-            self.inpaint_pipe.scheduler.config, timestep_spacing="trailing"
-        )
+        self.inpaint_pipe = StableDiffusionXLInpaintPipeline(
+            **self.pipe.components
+        ).to(self.device)
+        self.inpaint_pipe.watermark = None
 
         # ID adapters
         self.id_adapter = IDEncoder().to(self.device)
